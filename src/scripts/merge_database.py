@@ -236,10 +236,60 @@ def build_pxls_name_mapping(db_new_path, db_merged_path):
     print("pxls_name and pxls_user mapping complete.")
     return mapping, user_mapping
 
+def delete_old_template_data(malformed_db_path, merged_db_path):
+    """
+    Ensures all old template data is purged from the merged database.
+    This version includes robust connection handling to prevent unbound variable errors.
+    """
+    print("\nEnsuring old template data is purged from the merged database...")
+    
+    template_tables = ["template_stat", "template_manager", "template"]
+    
+    # **THE FIX**: Initialize connection variables to None
+    src_conn = None
+    tgt_conn = None
+
+    try:
+        # Step 1: Safeguard copy from the malformed DB
+        print("  - Attempting to copy old template data as a safeguard...")
+        src_conn = sqlite3.connect(malformed_db_path)
+        tgt_conn = sqlite3.connect(merged_db_path)
+        src_cur = src_conn.cursor()
+        tgt_cur = tgt_conn.cursor()
+
+        for table in template_tables:
+            src_cur.execute(f"SELECT * FROM {table}")
+            rows = src_cur.fetchall()
+            if rows:
+                placeholders = ", ".join(["?"] * len(rows[0]))
+                src_cur.execute(f"PRAGMA table_info({table})")
+                columns = [col[1] for col in src_cur.fetchall()]
+                col_str = ", ".join(columns)
+                tgt_cur.executemany(
+                    f"INSERT OR IGNORE INTO {table} ({col_str}) VALUES ({placeholders})", rows
+                )
+        tgt_conn.commit()
+        print("  - Safeguard copy complete.")
+    except Exception as e:
+        print(f"  - Safeguard copy failed (this is okay if tables don't exist): {e}")
+    finally:
+        # Now it's safe to close them, as they will either be a connection or None
+        if src_conn:
+            src_conn.close()
+        if tgt_conn:
+            tgt_conn.close()
+
+    # Step 2: Now, definitively delete all data from these tables.
+    print("  - Purging all template data...")
+    with sqlite3.connect(merged_db_path) as conn:
+        cur = conn.cursor()
+        for table in template_tables:
+            cur.execute(f"DELETE FROM {table}")
+            print(f"    - Purged {cur.rowcount} rows from {table}.")
+        conn.commit()
+        print("  - Old template data successfully purged.")
+
 def remap_and_merge_new_into_merged(db_new_path, db_merged_path, table_rules, mapping, user_mapping, record_id_offset):
-    """
-    Remaps data and merges it
-    """
     new_conn = sqlite3.connect(db_new_path)
     merged_conn = sqlite3.connect(db_merged_path)
     new_cur = new_conn.cursor()
@@ -248,7 +298,6 @@ def remap_and_merge_new_into_merged(db_new_path, db_merged_path, table_rules, ma
     print("Starting remapping and merge from DB_NEW...")
 
     for table, rules in table_rules.items():
-        # Skips already managed tables
         if table in ['pxls_user', 'pxls_name']:
             print(f"Skipping table '{table}' as it has already been merged.")
             continue
@@ -268,13 +317,11 @@ def remap_and_merge_new_into_merged(db_new_path, db_merged_path, table_rules, ma
             for row_tuple in rows:
                 row_dict = dict(zip(columns, row_tuple))
 
-                # Remap values based on the specific mappings provided.
+                # Apply necessary ID offsets and mappings
                 if 'record_id' in row_dict and row_dict['record_id'] is not None:
                     row_dict['record_id'] += record_id_offset
-                
                 if 'pxls_name_id' in row_dict and row_dict['pxls_name_id'] in mapping:
                     row_dict['pxls_name_id'] = mapping[row_dict['pxls_name_id']]
-
                 if 'pxls_user_id' in row_dict and row_dict['pxls_user_id'] in user_mapping:
                     row_dict['pxls_user_id'] = user_mapping[row_dict['pxls_user_id']]
 
@@ -674,6 +721,7 @@ if __name__ == "__main__":
     )
 
     salvage_orphaned_stats(DB_MERGED)
+    delete_old_template_data(DB_MALFORMED, DB_MERGED)
 
     # Step 2: Build mappings
     mapping, user_mapping = build_pxls_name_mapping(DB_NEW, DB_MERGED)
@@ -697,8 +745,13 @@ if __name__ == "__main__":
         new_min_record_id = conn_new.execute("SELECT MIN(record_id) FROM record").fetchone()[0] or 0
         if new_min_record_id is not None:
              record_id_offset = merged_max_record_id - new_min_record_id + 1
+    
     print(f"\nCalculated final record_id offset: {record_id_offset}")
 
-    remap_and_merge_new_into_merged(DB_NEW, DB_MERGED, TABLE_RULES, mapping, user_mapping, record_id_offset)
+    remap_and_merge_new_into_merged(
+        DB_NEW, DB_MERGED, TABLE_RULES, 
+        mapping, user_mapping, 
+        record_id_offset
+    )
     
     print("\nDatabase merge process finished.")
