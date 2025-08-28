@@ -436,13 +436,12 @@ class UserManager(commands.Cog):
     @user.sub_command(name="keys")
     async def _keys(self, inter):
         """Check the status of your log keys."""
-        await inter.response.defer()
         await self.keys(inter)
 
     @commands.command(name="keys", description="Check the status of your log keys.")
     async def p_keys(self, ctx):
         await self.keys(ctx)
-    
+
     async def keys(self, ctx):
         canvases_with_logs = await db_canvas.get_logs_canvases()
         res = []
@@ -453,66 +452,26 @@ class UserManager(commands.Cog):
             else:
                 status = "offline"
             res.append(f"{STATUS_EMOJIS.get(status)} `c{canvas_code}`")
-        if not res:
-            return await ctx.send("You haven't added any log keys yet.")
-        
-        coming_fields = []
-        current_field = ""
-        for line in res: 
-            if len(current_field) + len(line) + 1 > 1024:
-                coming_fields.append(current_field)
-                current_field = line
+
+        embed = disnake.Embed(color=0x66C5CC)
+        embed.set_author(name=ctx.author)
+        res = chunk(res, 3)
+
+        for i, group in enumerate(res):
+            if i == 0:
+                title = "**Log Keys**"
             else:
-                if current_field:
-                    current_field += f"\n{line}" 
-                else: 
-                    current_field = line
-        coming_fields.append(current_field)
-
-        coming_embeds = []
-        current_embed = disnake.Embed(color=0x66C5CC).set_author(name=ctx.author)
-        current_embed.title = "**Log Keys**"
-        total_chars = len(current_embed.title)
-
-        columns = ["", "", ""]
-        for i, line in enumerate(res):
-            col_index = i % 3
-            if (len(columns[col_index]) + len(line) + 1) > 1024 or \
-                (total_chars + len(line) + 1 > 6000) or \
-                (len(current_embed.fields) >= 25):
-                for col_text in columns:
-                    if col_text:
-                        current_embed.add_field(name="\u200b", value=col_text, inline=True)
-                coming_embeds.append(current_embed)
-                current_embed = disnake.Embed(color=0x66C5CC).set_author(name=ctx.author)
-                total_chars = 0
-                columns = ["", "", ""]
-            columns[col_index] += f"{line}\n"
-            total_chars += len(line) + 1
-        for col_text in columns:
-            if col_text:
-                if len(current_embed.fields) >= 25:
-                    coming_embeds.append(current_embed)
-                    current_embed = disnake.Embed(color=0x66C5CC).set_author(name=ctx.author)
-                current_embed.add_field(name="\u200b", value=col_text, inline=True)
-
-        coming_embeds.append(current_embed)
-        coming_embeds[-1].add_field(
-                name="Key Status",
-                value=f"{STATUS_EMOJIS['online']} = `key added` {STATUS_EMOJIS['offline']} = `key not added`",
-                inline=False,
-                    )
-        sent_messages = None
-        slash = isinstance(ctx, disnake.AppCmdInter)
-        for embed in coming_embeds:
-            if slash:
-                await ctx.followup.send(embed=embed)
-            else:
-                if sent_messages is None:
-                    sent_messages = await ctx.send(embed=embed)
-                else:
-                    sent_messages = await sent_messages.reply(embed=embed)
-
+                title = "\u200b"
+            embed.add_field(name=title, value="\n".join(group))
+        embed.add_field(
+            name="Key Status",
+            value=f"{STATUS_EMOJIS['online']} = `key added` {STATUS_EMOJIS['offline']} = `key not added`",
+            inline=False,
+        )
+        if isinstance(ctx, commands.Context):
+            return await ctx.send(embed=embed)
+        else:
+            return await ctx.send(embed=embed, ephemeral=True)
 
     @user.sub_command(name="unsetkey")
     async def _unsetkey(
